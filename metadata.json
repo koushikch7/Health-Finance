@@ -1,0 +1,13 @@
+{
+  "name": "OmniSync AI",
+  "description": "Unified dashboard tracking health parameters (heartrate, sleep, activity from Bluetooth wearables) and finances (parsed credit cards, SIPs, loans, transactions from calls & SMS). Features Gemini AI-powered wellness/financial analysis, a persistent smart chatbot, and automated SMTP daily summaries.",
+  "requestFramePermissions": [
+    "android.permission.INTERNET",
+    "android.permission.READ_SMS",
+    "android.permission.RECEIVE_SMS",
+    "android.permission.READ_CALL_LOG",
+    "android.permission.BLUETOOTH_CONNECT",
+    "android.permission.BLUETOOTH_SCAN"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
