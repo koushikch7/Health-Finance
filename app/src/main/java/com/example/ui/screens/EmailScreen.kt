@@ -83,9 +83,9 @@ fun EmailScreen(viewModel: OmniSyncViewModel) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                ProviderLabelCard(provider = "GMAIL", weight = 1f, color = Color(0xFFEA4335), checked = true)
-                ProviderLabelCard(provider = "OUTLOOK", weight = 1f, color = Color(0xFF0078D4), checked = true)
-                ProviderLabelCard(provider = "ZOHO", weight = 1f, color = Color(0xFF00BFFF), checked = true)
+                ProviderLabelCard(provider = "GMAIL", color = Color(0xFFEA4335), checked = true)
+                ProviderLabelCard(provider = "OUTLOOK", color = Color(0xFF0078D4), checked = true)
+                ProviderLabelCard(provider = "ZOHO", color = Color(0xFF00BFFF), checked = true)
             }
         }
 
@@ -280,7 +280,7 @@ fun EmailScreen(viewModel: OmniSyncViewModel) {
 }
 
 @Composable
-fun ProviderLabelCard(provider: String, weight: Float, color: Color, checked: Boolean) {
+fun ProviderLabelCard(provider: String, color: Color, checked: Boolean) {
     Card(
         modifier = Modifier
             .background(Color.Transparent)

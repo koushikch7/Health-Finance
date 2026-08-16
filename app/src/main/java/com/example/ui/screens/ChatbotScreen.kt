@@ -22,7 +22,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.viewmodel.OmniSyncViewModel
-import kotlinx.coroutines.launch
 
 @Composable
 fun ChatbotScreen(viewModel: OmniSyncViewModel) {
@@ -32,7 +31,6 @@ fun ChatbotScreen(viewModel: OmniSyncViewModel) {
     val inputText by viewModel.inputText.collectAsState()
     val isGeneratingAI by viewModel.isGeneratingAILink.collectAsState()
 
-    val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
     // Scroll to bottom on updates
@@ -182,7 +180,7 @@ fun ChatbotScreen(viewModel: OmniSyncViewModel) {
                                         )
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Text(
-                                            text = if (isUser) "Koushik" else "OmniSync AI",
+                                            text = if (isUser) "You" else "OmniSync AI",
                                             style = MaterialTheme.typography.labelSmall,
                                             fontWeight = FontWeight.Bold,
                                             color = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f) else MaterialTheme.colorScheme.primary

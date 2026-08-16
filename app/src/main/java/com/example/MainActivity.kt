@@ -56,7 +56,6 @@ class MainActivity : ComponentActivity() {
             AppDatabase::class.java,
             "omnisync_intelligence_db"
         )
-            .fallbackToDestructiveMigration()
             .build()
 
         repository = OmniSyncRepository(applicationContext, database)

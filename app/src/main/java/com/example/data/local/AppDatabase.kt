@@ -37,6 +37,9 @@ interface HealthDao {
 
     @Query("DELETE FROM health_metrics")
     suspend fun clearAllMetrics()
+
+    @Query("SELECT * FROM health_metrics ORDER BY timestamp DESC")
+    suspend fun getAllMetricsDirect(): List<HealthMetricEntity>
 }
 
 @Dao
@@ -52,6 +55,9 @@ interface FinancialDao {
 
     @Query("DELETE FROM financial_records")
     suspend fun clearAllRecords()
+
+    @Query("SELECT * FROM financial_records ORDER BY timestamp DESC")
+    suspend fun getAllRecordsDirect(): List<FinancialRecordEntity>
 }
 
 @Dao
@@ -73,6 +79,9 @@ interface EmailDao {
 
     @Query("DELETE FROM email_items")
     suspend fun clearAllMails()
+
+    @Query("SELECT * FROM email_items ORDER BY timestamp DESC")
+    suspend fun getAllEmailsDirect(): List<EmailItemEntity>
 }
 
 @Dao

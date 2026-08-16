@@ -193,23 +193,25 @@ class OmniSyncRepository(private val context: Context, private val database: App
             val cursor = context.contentResolver.query(
                 Telephony.Sms.CONTENT_URI,
                 arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE),
-                null, null, "${Telephony.Sms.DATE} DESC LIMIT 30"
+                null, null, "${Telephony.Sms.DATE} DESC"
             )
             cursor?.use {
                 val addressIdx = it.getColumnIndex(Telephony.Sms.ADDRESS)
                 val bodyIdx = it.getColumnIndex(Telephony.Sms.BODY)
                 val dateIdx = it.getColumnIndex(Telephony.Sms.DATE)
                 if (addressIdx >= 0 && bodyIdx >= 0 && dateIdx >= 0) {
-                    while (it.moveToNext()) {
+                    var smsCount = 0
+                    while (it.moveToNext() && smsCount < 30) {
                         val address = it.getString(addressIdx)
                         val body = it.getString(bodyIdx)
                         val timestamp = it.getLong(dateIdx)
-                        
+
                         val record = parseFinancialSmsBody(address, body, timestamp)
                         if (record != null) {
                             financialDao.insertRecord(record)
                             count++
                         }
+                        smsCount++
                     }
                 }
             }
@@ -222,21 +224,23 @@ class OmniSyncRepository(private val context: Context, private val database: App
             val cursor = context.contentResolver.query(
                 CallLog.Calls.CONTENT_URI,
                 arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.DATE, CallLog.Calls.DURATION, CallLog.Calls.TYPE),
-                null, null, "${CallLog.Calls.DATE} DESC LIMIT 20"
+                null, null, "${CallLog.Calls.DATE} DESC"
             )
             cursor?.use {
                 val numberIdx = it.getColumnIndex(CallLog.Calls.NUMBER)
                 val dateIdx = it.getColumnIndex(CallLog.Calls.DATE)
                 if (numberIdx >= 0 && dateIdx >= 0) {
-                    while (it.moveToNext()) {
+                    var callCount = 0
+                    while (it.moveToNext() && callCount < 20) {
                         val number = it.getString(numberIdx)
                         val timestamp = it.getLong(dateIdx)
-                        
+
                         val record = parseFinancialCallLog(number, timestamp)
                         if (record != null) {
                             financialDao.insertRecord(record)
                             count++
                         }
+                        callCount++
                     }
                 }
             }
@@ -372,7 +376,7 @@ class OmniSyncRepository(private val context: Context, private val database: App
     private fun extractAmount(text: String): Double {
         val regex = Regex("(?:inr|rs|usd|\\$|eur)\\.?\\s*([\\d,]+(?:\\.\\d{2})?)")
         val match = regex.find(text)
-        return match?.groupValues?.get(1)?.replace(",", "")?.toDoubleOrNull() ?: (500..2500).random().toDouble()
+        return match?.groupValues?.get(1)?.replace(",", "")?.toDoubleOrNull() ?: 0.0
     }
 
     suspend fun clearFinancialRecords() = withContext(Dispatchers.IO) {
@@ -384,8 +388,6 @@ class OmniSyncRepository(private val context: Context, private val database: App
 
     suspend fun syncMultiAccountMails() = withContext(Dispatchers.IO) {
         val composioApiKey = getSettingValue("composio_api_key")
-        
-        emailDao.clearAllMails()
 
         val composioMails = if (composioApiKey.isNotEmpty()) {
             com.example.data.api.ComposioClient.fetchRecentGmailMails(composioApiKey).map {
@@ -405,6 +407,7 @@ class OmniSyncRepository(private val context: Context, private val database: App
         }
 
         if (composioMails.isNotEmpty()) {
+            emailDao.clearAllMails()
             composioMails.forEach { emailDao.insertEmail(it) }
             return@withContext
         }
@@ -412,17 +415,17 @@ class OmniSyncRepository(private val context: Context, private val database: App
         // Fallback to sample data if no API key is provided or fetch fails
         val sampleEmails = listOf(
             EmailItemEntity(
-                accountEmail = "koushik.ch7@gmail.com",
+                accountEmail = "user@gmail.com",
                 provider = "GMAIL",
                 sender = "Vanguard Portfolio Insights",
                 subject = "Quarterly SIP Statement Analysis - May 2026",
                 summary = "SIP investment grew 11.2% over last quarter. Recommended alignment to balanced mid-cap funds.",
-                fullBody = "Dear Koushik, your monthly SIP of 12,000 INR has been successfully aggregated. The net asset value has appreciated. No major modifications to portfolio allocations are suggested.",
+                fullBody = "Your monthly SIP has been successfully aggregated. The net asset value has appreciated. No major modifications to portfolio allocations are suggested.",
                 category = "PRIMARY",
                 isRead = false
             ),
             EmailItemEntity(
-                accountEmail = "koushik.ch7@gmail.com",
+                accountEmail = "user@gmail.com",
                 provider = "GMAIL",
                 sender = "Netflix Promo Team",
                 subject = "30% off Premium plan upgrade exclusively for you!",
@@ -432,9 +435,9 @@ class OmniSyncRepository(private val context: Context, private val database: App
                 isRead = true
             ),
             EmailItemEntity(
-                accountEmail = "koushik.ch7@gmail.com",
+                accountEmail = "user@gmail.com",
                 provider = "GMAIL",
-                sender = "Critical Security Alert",
+                sender = "Security Alert",
                 subject = "Unauthorized Login Attempt Flagged: Chase Loan Suite",
                 summary = "Suspicious access blocked from foreign ISP. Secure account immediately.",
                 fullBody = "We blocked an unauthorized device trying to sign in to your home equity credit suite. Password reset is strongly suggested.",
@@ -442,7 +445,7 @@ class OmniSyncRepository(private val context: Context, private val database: App
                 isRead = false
             ),
             EmailItemEntity(
-                accountEmail = "koushik.ch7@outlook.com",
+                accountEmail = "user@outlook.com",
                 provider = "OUTLOOK",
                 sender = "Unknown Lottery Hub",
                 subject = "CONGRATULATIONS!! You won a standard cash price of 5,000,000 USD!!!",
@@ -452,17 +455,17 @@ class OmniSyncRepository(private val context: Context, private val database: App
                 isRead = false
             ),
             EmailItemEntity(
-                accountEmail = "koushik.ch7@zoho.com",
+                accountEmail = "user@zoho.com",
                 provider = "ZOHO",
                 sender = "Acme Corp Office Admin",
                 subject = "Loan eligibility statement and interest calculations updated",
                 summary = "Corporate partner preferential loan rates: Home housing logs start at 7.15% fixed.",
-                fullBody = "We are glad to inform you that your linked corporate Zoho ID qualified for the custom interest mortgage rate of 7.15% fixed per annum instead of 8.4%. Please coordinate paperwork.",
+                fullBody = "Your linked corporate ID qualified for the custom interest mortgage rate of 7.15% fixed per annum instead of 8.4%. Please coordinate paperwork.",
                 category = "PRIMARY",
                 isRead = false
             ),
             EmailItemEntity(
-                accountEmail = "koushik.ch7@zoho.com",
+                accountEmail = "user@zoho.com",
                 provider = "ZOHO",
                 sender = "Daily Deals Desk",
                 subject = "Coupons for shoes, groceries inside!!",
@@ -473,6 +476,7 @@ class OmniSyncRepository(private val context: Context, private val database: App
             )
         )
 
+        emailDao.clearAllMails()
         sampleEmails.forEach { emailDao.insertEmail(it) }
     }
 
@@ -525,8 +529,8 @@ class OmniSyncRepository(private val context: Context, private val database: App
     suspend fun sendDailySmtpSummaryMail(): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val host = getSettingValue("smtp_host").ifEmpty { "smtp.gmail.com" }
         val port = getSettingValue("smtp_port").ifEmpty { "465" }
-        val user = getSettingValue("smtp_username").ifEmpty { "koushik.ch7@gmail.com" }
-        val recipient = getSettingValue("smtp_recipient").ifEmpty { "koushik.ch7@gmail.com" }
+        val user = getSettingValue("smtp_username")
+        val recipient = getSettingValue("smtp_recipient")
 
         val healthStr = gatherHealthContext()
         val financeStr = gatherFinancialContext()
@@ -549,17 +553,16 @@ class OmniSyncRepository(private val context: Context, private val database: App
             $emailStr
             
             --------------------------------------------------
-            This is an automated SMTP transaction summary powered by Gemini 3.1 Flash Lite.
+            This is an automated OmniSync intelligence brief.
         """.trimIndent()
 
-        // Realistically report completion of mock transaction, explaining security sandbox guidelines.
-        Log.i("OmniSyncSMTP", "Sending daily SMTP mail successfully to $recipient via $host:$port")
-        return@withContext Pair(true, "Successfully fired daily intelligence dispatch email to $recipient via SMTP Host $host on port $port!")
+        Log.i("OmniSyncSMTP", "SMTP dispatch requested to $recipient via $host:$port (not yet implemented)")
+        return@withContext Pair(false, "SMTP dispatch is not yet implemented. Configure a real SMTP library to send to $recipient.")
     }
 
     // --- Private Context Aggregators ---
     private suspend fun gatherHealthContext(): String {
-        val metrics = database.healthDao().getAllMetrics().firstOrNull() ?: emptyList()
+        val metrics = database.healthDao().getAllMetricsDirect()
         if (metrics.isEmpty()) return "No synchronized wearable data found. Please trigger Galaxy Watch Bluetooth active sync."
         val latest = metrics.first()
         return """
@@ -574,7 +577,7 @@ class OmniSyncRepository(private val context: Context, private val database: App
     }
 
     private suspend fun gatherFinancialContext(): String {
-        val records = database.financialDao().getAllRecords().firstOrNull() ?: emptyList()
+        val records = database.financialDao().getAllRecordsDirect()
         if (records.isEmpty()) return "No parsed financial notifications found."
         val expenses = records.filter { it.type == "EXPENSE" }
         val earnings = records.filter { it.type == "EARNING" }
@@ -595,7 +598,7 @@ class OmniSyncRepository(private val context: Context, private val database: App
     }
 
     private suspend fun gatherEmailContext(): String {
-        val mails = database.emailDao().getAllEmails().firstOrNull() ?: emptyList()
+        val mails = database.emailDao().getAllEmailsDirect()
         if (mails.isEmpty()) return "Zero current emails synchronized."
         val primary = mails.filter { it.category == "PRIMARY" }
         val promotions = mails.filter { it.category == "PROMOTIONS" }

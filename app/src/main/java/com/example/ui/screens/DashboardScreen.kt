@@ -217,9 +217,9 @@ fun DashboardScreen(viewModel: OmniSyncViewModel) {
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        EmailBar(label = "Primary AI Summary", count = primaryMails, color = MaterialTheme.colorScheme.primary, weight = 1f)
-                        EmailBar(label = "Promotional Diverts", count = promoMails, color = Color(0xFFFFB74D), weight = 1f)
-                        EmailBar(label = "Spam Blocked", count = spamMails, color = Color(0xFFE57373), weight = 1f)
+                        EmailBar(label = "Primary AI Summary", count = primaryMails, color = MaterialTheme.colorScheme.primary)
+                        EmailBar(label = "Promotional Diverts", count = promoMails, color = Color(0xFFFFB74D))
+                        EmailBar(label = "Spam Blocked", count = spamMails, color = Color(0xFFE57373))
                     }
                 }
             }
@@ -283,13 +283,13 @@ fun DashboardScreen(viewModel: OmniSyncViewModel) {
 fun HeaderSection() {
     Column(modifier = Modifier.padding(vertical = 12.dp)) {
         Text(
-            text = "Welcome Back, Koushik",
+            text = "OmniSync Dashboard",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Black,
             color = MaterialTheme.colorScheme.primary
         )
         Text(
-            text = "Omnisync AI is scanning wearables, cards, SMS, & emails.",
+            text = "Aggregating wearables, cards, SMS, & emails in real-time.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
         )
@@ -365,7 +365,7 @@ fun InfoMetricCard(modifier: Modifier = Modifier, title: String, value: String, 
 }
 
 @Composable
-fun EmailBar(label: String, count: Int, color: Color, weight: Float) {
+fun EmailBar(label: String, count: Int, color: Color) {
     Card(
         modifier = Modifier
             .fillMaxWidth()

@@ -25,7 +25,7 @@ object GeminiClient {
         prompt: String,
         systemInstruction: String? = null,
         chatHistory: List<Pair<String, String>> = emptyList(), // role to text
-        model: String = "gemini-3.1-flash-lite-preview",
+        model: String = "gemini-2.0-flash",
         customBaseUrl: String = "",
         customApiKey: String = "",
         customModel: String = ""

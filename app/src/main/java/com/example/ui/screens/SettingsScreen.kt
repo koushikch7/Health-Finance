@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.viewmodel.OmniSyncViewModel
@@ -119,7 +120,8 @@ fun SettingsScreen(viewModel: OmniSyncViewModel) {
                         onValueChange = { tempPass = it },
                         label = { Text("SMTP Password / Credential Token") },
                         modifier = Modifier.fillMaxWidth().testTag("smtp_pass_input"),
-                        singleLine = true
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
 
@@ -244,7 +246,7 @@ fun SettingsScreen(viewModel: OmniSyncViewModel) {
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        "Backup your unified synchronized knowledge base to primary business clouds.",
+                        "Backup configuration — full OAuth integration coming in a future update. Toggle state is saved but no actual sync occurs yet.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     )
@@ -270,7 +272,7 @@ fun SettingsScreen(viewModel: OmniSyncViewModel) {
                             Column {
                                 Text("Google Drive Folder sync", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                                 Text(
-                                    text = if (isDriveConnected) "Linked via Google Identity OAuth" else "Not Linked",
+                                    text = if (isDriveConnected) "Enabled (setup coming soon)" else "Not configured",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (isDriveConnected) Color(0xFF34A853) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                                     fontWeight = FontWeight.SemiBold
@@ -308,7 +310,7 @@ fun SettingsScreen(viewModel: OmniSyncViewModel) {
                             Column {
                                 Text("Nextcloud WebDAV Sync", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                                 Text(
-                                    text = if (isNextcloudConnected) "Connected via active protocol URL" else "Disconnected",
+                                    text = if (isNextcloudConnected) "Enabled (setup coming soon)" else "Not configured",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (isNextcloudConnected) Color(0xFF0082C9) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                                     fontWeight = FontWeight.SemiBold

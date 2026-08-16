@@ -13,6 +13,7 @@ import com.example.data.local.EmailItemEntity
 import com.example.data.local.FinancialRecordEntity
 import com.example.data.local.HealthMetricEntity
 import com.example.data.repository.OmniSyncRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -117,13 +118,14 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
         _inputText.value = text
     }
 
+    private var messageCollectionJob: Job? = null
+
     fun selectThread(threadId: String) {
         _activeThreadId.value = threadId
-        viewModelScope.launch {
+        messageCollectionJob?.cancel()
+        messageCollectionJob = viewModelScope.launch {
             repository.getMessagesForThread(threadId).collect { msgs ->
-                if (_activeThreadId.value == threadId) {
-                    _activeMessages.value = msgs
-                }
+                _activeMessages.value = msgs
             }
         }
     }
@@ -136,10 +138,9 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
     }
 
     fun deleteThreadClick(threadId: String) {
+        val nextThread = chatThreads.value.firstOrNull { it.id != threadId }
         viewModelScope.launch {
             repository.deleteThread(threadId)
-            val currentThreads = chatThreads.value
-            val nextThread = currentThreads.firstOrNull { it.id != threadId }
             if (nextThread != null) {
                 selectThread(nextThread.id)
             } else {
@@ -176,11 +177,11 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
         private set
     var smtpPort = MutableStateFlow("465")
         private set
-    var smtpUsername = MutableStateFlow("koushik.ch7@gmail.com")
+    var smtpUsername = MutableStateFlow("")
         private set
-    var smtpPassword = MutableStateFlow("••••••••••••")
+    var smtpPassword = MutableStateFlow("")
         private set
-    var smtpRecipient = MutableStateFlow("koushik.ch7@gmail.com")
+    var smtpRecipient = MutableStateFlow("")
         private set
 
     var aiBaseUrl = MutableStateFlow("")
@@ -193,14 +194,13 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
         private set
 
     init {
-        // Load settings values from repository
         viewModelScope.launch {
             smtpHost.value = repository.getSettingValue("smtp_host").ifEmpty { "smtp.gmail.com" }
             smtpPort.value = repository.getSettingValue("smtp_port").ifEmpty { "465" }
-            smtpUsername.value = repository.getSettingValue("smtp_username").ifEmpty { "koushik.ch7@gmail.com" }
-            smtpPassword.value = repository.getSettingValue("smtp_password").ifEmpty { "••••••••••••" }
-            smtpRecipient.value = repository.getSettingValue("smtp_recipient").ifEmpty { "koushik.ch7@gmail.com" }
-            
+            smtpUsername.value = repository.getSettingValue("smtp_username")
+            smtpPassword.value = repository.getSettingValue("smtp_password")
+            smtpRecipient.value = repository.getSettingValue("smtp_recipient")
+
             aiBaseUrl.value = repository.getSettingValue("ai_base_url")
             aiApiKey.value = repository.getSettingValue("ai_api_key")
             aiModel.value = repository.getSettingValue("ai_model")
@@ -209,13 +209,15 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
             _googleDriveConnected.value = repository.getSettingValue("gdrive_connected").toBoolean()
             _nextcloudConnected.value = repository.getSettingValue("nextcloud_connected").toBoolean()
 
-            // Pre-seed database values so details are fully loaded on first open
-            repository.syncBluetoothWatchMetrics()
-            repository.runSmsAndCallFinanceParse()
-            repository.syncMultiAccountMails()
-            generateWellnessInsights()
+            // Pre-seed data in parallel
+            launch { repository.syncBluetoothWatchMetrics() }
+            launch { repository.runSmsAndCallFinanceParse() }
+            launch { repository.syncMultiAccountMails() }
+            launch { generateWellnessInsights() }
+        }
 
-            // Automatically open chat thread if not exists
+        // Manage active thread in a separate coroutine so it isn't blocked by data loading
+        viewModelScope.launch {
             repository.allThreads.collect { threads ->
                 if (threads.isNotEmpty() && _activeThreadId.value == null) {
                     selectThread(threads.first().id)
