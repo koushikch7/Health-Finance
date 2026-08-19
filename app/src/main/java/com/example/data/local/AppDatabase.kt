@@ -17,11 +17,23 @@ interface ChatDao {
     @Query("SELECT * FROM chat_messages WHERE threadId = :threadId ORDER BY timestamp ASC")
     fun getMessagesForThread(threadId: String): Flow<List<ChatMessageEntity>>
 
+    @Query("SELECT * FROM chat_messages WHERE threadId = :threadId ORDER BY timestamp ASC")
+    suspend fun getMessagesForThreadDirect(threadId: String): List<ChatMessageEntity>
+
+    @Query("SELECT COUNT(*) FROM chat_threads")
+    suspend fun countThreads(): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: ChatMessageEntity)
 
     @Query("DELETE FROM chat_messages WHERE threadId = :threadId")
     suspend fun deleteMessagesForThread(threadId: String)
+
+    @Transaction
+    suspend fun deleteThreadWithMessages(threadId: String) {
+        deleteMessagesForThread(threadId)
+        deleteThread(threadId)
+    }
 }
 
 @Dao
@@ -49,6 +61,13 @@ interface FinancialDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRecord(record: FinancialRecordEntity)
+
+    /** Ignores rows whose [FinancialRecordEntity.dedupeKey] already exists, keeping re-syncs idempotent. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertRecordIfNew(record: FinancialRecordEntity): Long
+
+    @Query("SELECT COUNT(*) FROM financial_records")
+    suspend fun countRecords(): Int
 
     @Query("DELETE FROM financial_records WHERE id = :id")
     suspend fun deleteRecord(id: Long)
@@ -80,6 +99,12 @@ interface EmailDao {
     @Query("DELETE FROM email_items")
     suspend fun clearAllMails()
 
+    @Query("UPDATE email_items SET isRead = 1 WHERE id = :id")
+    suspend fun markEmailRead(id: Long)
+
+    @Query("SELECT COUNT(*) FROM email_items")
+    suspend fun countEmails(): Int
+
     @Query("SELECT * FROM email_items ORDER BY timestamp DESC")
     suspend fun getAllEmailsDirect(): List<EmailItemEntity>
 }
@@ -105,7 +130,7 @@ interface SettingsDao {
         EmailItemEntity::class,
         AppSettingEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -114,4 +139,23 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun financialDao(): FinancialDao
     abstract fun emailDao(): EmailDao
     abstract fun settingsDao(): SettingsDao
+
+    companion object {
+        @Volatile
+        private var INSTANCE: AppDatabase? = null
+
+        fun getInstance(context: android.content.Context): AppDatabase =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: Room.databaseBuilder(
+                    context.applicationContext,
+                    AppDatabase::class.java,
+                    "omnisync_intelligence_db"
+                )
+                    // The schema is a local cache that can always be rebuilt from the
+                    // device sources, so a destructive fallback is safe here.
+                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    .build()
+                    .also { INSTANCE = it }
+            }
+    }
 }

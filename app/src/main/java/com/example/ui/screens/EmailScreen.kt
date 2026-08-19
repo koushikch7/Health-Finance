@@ -149,12 +149,19 @@ fun EmailScreen(viewModel: OmniSyncViewModel) {
                 }
             }
         } else {
-            items(filteredList) { mail ->
+            items(filteredList, key = { it.id }) { mail ->
                 val isExpanded = expandedMailId == mail.id
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { expandedMailId = if (isExpanded) null else mail.id },
+                        .clickable {
+                            if (isExpanded) {
+                                expandedMailId = null
+                            } else {
+                                expandedMailId = mail.id
+                                if (!mail.isRead) viewModel.markEmailRead(mail.id)
+                            }
+                        },
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(
                         containerColor = if (isExpanded) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
@@ -192,11 +199,22 @@ fun EmailScreen(viewModel: OmniSyncViewModel) {
                                 }
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
-                                    Text(
-                                        text = mail.sender,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (!mail.isRead) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(7.dp)
+                                                    .clip(CircleShape)
+                                                    .background(MaterialTheme.colorScheme.primary)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                        }
+                                        Text(
+                                            text = mail.sender,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (mail.isRead) FontWeight.Normal else FontWeight.Bold
+                                        )
+                                    }
                                     Text(
                                         text = mail.accountEmail,
                                         style = MaterialTheme.typography.labelSmall,
@@ -255,7 +273,7 @@ fun EmailScreen(viewModel: OmniSyncViewModel) {
                             exit = shrinkVertically() + fadeOut()
                         ) {
                             Column(modifier = Modifier.padding(top = 12.dp)) {
-                                Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                                HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
                                 Spacer(modifier = Modifier.height(10.dp))
                                 Text(
                                     text = "Full message Content:",

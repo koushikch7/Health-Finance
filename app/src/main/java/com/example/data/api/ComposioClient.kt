@@ -56,9 +56,10 @@ object ComposioClient {
                         val msg = messages.optJSONObject(i) ?: continue
                         results.add(
                             EmailData(
-                                sender = msg.optString("sender", "Unknown Sender"),
+                                sender = msg.optString("sender", msg.optString("from", "Unknown Sender")),
                                 subject = msg.optString("subject", "No Subject"),
-                                snippet = msg.optString("snippet", "")
+                                snippet = msg.optString("snippet", msg.optString("messageText", "")),
+                                accountEmail = msg.optString("to", data.optString("account", "connected account"))
                             )
                         )
                     }
@@ -77,5 +78,6 @@ object ComposioClient {
 data class EmailData(
     val sender: String,
     val subject: String,
-    val snippet: String
+    val snippet: String,
+    val accountEmail: String = "connected account"
 )

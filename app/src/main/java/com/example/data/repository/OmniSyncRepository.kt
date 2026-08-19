@@ -1,24 +1,33 @@
 package com.example.data.repository
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.provider.CallLog
 import android.provider.Telephony
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.example.data.api.GeminiClient
+import com.example.data.api.SmtpClient
 import com.example.data.local.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.UUID
+
+private const val MAX_SMS_SCAN = 300
+private const val MAX_CALL_SCAN = 100
+private const val KEY_DEMO_SEEDED = "demo_records_seeded"
 
 class OmniSyncRepository(private val context: Context, private val database: AppDatabase) {
 
@@ -49,8 +58,12 @@ class OmniSyncRepository(private val context: Context, private val database: App
     }
 
     suspend fun deleteThread(threadId: String) = withContext(Dispatchers.IO) {
-        chatDao.deleteThread(threadId)
-        chatDao.deleteMessagesForThread(threadId)
+        chatDao.deleteThreadWithMessages(threadId)
+    }
+
+    /** Ensures at least one thread exists; returns the thread that should be shown. */
+    suspend fun ensureThreadExists(defaultTitle: String): ChatThreadEntity? = withContext(Dispatchers.IO) {
+        if (chatDao.countThreads() == 0) createNewThread(defaultTitle) else null
     }
 
     suspend fun sendChatMessage(threadId: String, userText: String) = withContext(Dispatchers.IO) {
@@ -82,10 +95,13 @@ class OmniSyncRepository(private val context: Context, private val database: App
             Refer to the data directly to provide authentic personal analytics. Always keep suggestions practical and professional.
         """.trimIndent()
 
-        // Fetch Thread History (limit to last 15 messages for token thrift)
-        val historyFlow = chatDao.getMessagesForThread(threadId)
-        val historyList = historyFlow.firstOrNull() ?: emptyList()
-        val historyPairs = historyList.takeLast(15).map { it.role to it.content }
+        // Fetch thread history (limit to last 15 messages for token thrift).
+        // The message just inserted is dropped here because it is sent as the live `prompt`.
+        val historyList = chatDao.getMessagesForThreadDirect(threadId)
+        val historyPairs = historyList
+            .dropLast(1)
+            .takeLast(15)
+            .map { it.role to it.content }
 
         val aiBaseUrl = getSettingValue("ai_base_url")
         val aiApiKey = getSettingValue("ai_api_key")
@@ -108,75 +124,93 @@ class OmniSyncRepository(private val context: Context, private val database: App
     val allHealthMetrics: Flow<List<HealthMetricEntity>> = healthDao.getAllMetrics()
     val latestHealthMetric: Flow<HealthMetricEntity?> = healthDao.getLatestMetric()
 
-    suspend fun syncBluetoothWatchMetrics() = withContext(Dispatchers.IO) {
-        val healthConnectAvailable = HealthConnectClient.getSdkStatus(context) == HealthConnectClient.SDK_AVAILABLE
-        if (healthConnectAvailable) {
-            try {
-                val healthConnectClient = HealthConnectClient.getOrCreate(context)
-                val endTime = Instant.now()
-                val startTime = endTime.minus(24, ChronoUnit.HOURS)
-                val timeRangeFilter = TimeRangeFilter.between(startTime, endTime)
+    /** Outcome of a wearable sync so the UI can explain what actually happened. */
+    data class HealthSyncResult(val success: Boolean, val message: String)
 
-                // Fetch Steps
-                val stepsResponse = healthConnectClient.readRecords(
-                    ReadRecordsRequest(StepsRecord::class, timeRangeFilter)
-                )
-                val totalSteps = stepsResponse.records.sumOf { it.count }.toInt()
+    /** Health Connect read permissions the app needs. */
+    val healthConnectPermissions: Set<String> = setOf(
+        HealthPermission.getReadPermission(StepsRecord::class),
+        HealthPermission.getReadPermission(HeartRateRecord::class),
+        HealthPermission.getReadPermission(SleepSessionRecord::class)
+    )
 
-                // Fetch Heart Rate
-                val hrResponse = healthConnectClient.readRecords(
-                    ReadRecordsRequest(HeartRateRecord::class, timeRangeFilter)
-                )
-                val avgHr = if (hrResponse.records.isNotEmpty()) {
-                    val samples = hrResponse.records.flatMap { it.samples }
-                    if (samples.isNotEmpty()) samples.sumOf { it.beatsPerMinute }.toInt() / samples.size else 75
-                } else {
-                    (65..85).random() // Fallback if no specific HR data but HealthConnect works
-                }
-
-                // Fetch Sleep
-                val sleepResponse = healthConnectClient.readRecords(
-                    ReadRecordsRequest(SleepSessionRecord::class, timeRangeFilter)
-                )
-                val totalSleepMins = if (sleepResponse.records.isNotEmpty()) {
-                    sleepResponse.records.sumOf { ChronoUnit.MINUTES.between(it.startTime, it.endTime) }.toInt()
-                } else {
-                    (360..480).random()
-                }
-                
-                val calories = (totalSteps * 0.04).toInt() + 1500
-
-                val incomingMetric = HealthMetricEntity(
-                    heartRate = avgHr,
-                    sleepMinutes = totalSleepMins,
-                    sleepScore = (70..95).random(), // Sleep score is complex to calculate locally natively
-                    steps = totalSteps,
-                    calories = calories,
-                    rxtype = "Android Health Connect Sync"
-                )
-                healthDao.insertMetric(incomingMetric)
-                return@withContext
-            } catch (e: Exception) {
-                Log.e("HealthConnect", "Error reading health connect: ${e.message}")
-            }
+    suspend fun syncBluetoothWatchMetrics(): HealthSyncResult = withContext(Dispatchers.IO) {
+        when (HealthConnectClient.getSdkStatus(context)) {
+            HealthConnectClient.SDK_UNAVAILABLE ->
+                return@withContext seedDemoHealth("Health Connect is not supported on this device. Showing sample vitals.")
+            HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED ->
+                return@withContext seedDemoHealth("Please install/update the Health Connect app, then sync again.")
         }
 
-        // Fallback to Simulation if Health Connect is not available or errors out
-        val heartRate = (60..135).random()
-        val sleepMinutes = (320..540).random()
-        val sleepScore = (65..98).random()
-        val steps = (3000..12000).random()
-        val calories = (steps * 0.04).toInt() + (1400..1800).random()
+        try {
+            val client = HealthConnectClient.getOrCreate(context)
+            val granted = client.permissionController.getGrantedPermissions()
+            if (!granted.containsAll(healthConnectPermissions)) {
+                return@withContext HealthSyncResult(
+                    false,
+                    "Health Connect permissions were not granted. Tap 'Grant health access' to enable real vitals."
+                )
+            }
 
-        val incomingMetric = HealthMetricEntity(
-            heartRate = heartRate,
-            sleepMinutes = sleepMinutes,
-            sleepScore = sleepScore,
-            steps = steps,
-            calories = calories,
-            rxtype = "Simulated Fallback (No HC)"
-        )
-        healthDao.insertMetric(incomingMetric)
+            val endTime = Instant.now()
+            val startTime = endTime.minus(24, ChronoUnit.HOURS)
+            val range = TimeRangeFilter.between(startTime, endTime)
+
+            val totalSteps = client.readRecords(ReadRecordsRequest(StepsRecord::class, range))
+                .records.sumOf { it.count }.toInt()
+
+            val hrSamples = client.readRecords(ReadRecordsRequest(HeartRateRecord::class, range))
+                .records.flatMap { it.samples }
+            val avgHr = if (hrSamples.isNotEmpty()) {
+                (hrSamples.sumOf { it.beatsPerMinute } / hrSamples.size).toInt()
+            } else 0
+
+            val totalSleepMins = client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, range))
+                .records.sumOf { ChronoUnit.MINUTES.between(it.startTime, it.endTime) }.toInt()
+
+            if (totalSteps == 0 && avgHr == 0 && totalSleepMins == 0) {
+                return@withContext HealthSyncResult(
+                    false,
+                    "Health Connect returned no records for the last 24 hours. Make sure your watch app writes to Health Connect."
+                )
+            }
+
+            healthDao.insertMetric(
+                HealthMetricEntity(
+                    heartRate = avgHr,
+                    sleepMinutes = totalSleepMins,
+                    // Derived from sleep duration against an 8h target — no invented numbers.
+                    sleepScore = ((totalSleepMins / 480.0) * 100).toInt().coerceIn(0, 100),
+                    steps = totalSteps,
+                    calories = (totalSteps * 0.04).toInt(),
+                    rxtype = "Health Connect"
+                )
+            )
+            HealthSyncResult(true, "Synced $totalSteps steps and $totalSleepMins min of sleep from Health Connect.")
+        } catch (e: Exception) {
+            Log.e("HealthConnect", "Error reading Health Connect", e)
+            HealthSyncResult(false, "Health Connect read failed: ${e.localizedMessage ?: "unknown error"}")
+        }
+    }
+
+    /**
+     * Inserts a clearly-labelled sample reading so the dashboard is demonstrable on devices
+     * without Health Connect. Only ever inserted once.
+     */
+    private suspend fun seedDemoHealth(reason: String): HealthSyncResult {
+        if (healthDao.getAllMetricsDirect().isEmpty()) {
+            healthDao.insertMetric(
+                HealthMetricEntity(
+                    heartRate = 72,
+                    sleepMinutes = 431,
+                    sleepScore = 90,
+                    steps = 8420,
+                    calories = 337,
+                    rxtype = "Sample data (not from a device)"
+                )
+            )
+        }
+        return HealthSyncResult(false, reason)
     }
 
     suspend fun clearHealthData() = withContext(Dispatchers.IO) {
@@ -186,198 +220,133 @@ class OmniSyncRepository(private val context: Context, private val database: App
     // --- Financial Records Core (Messages & Calls parser) ---
     val allFinancialRecords: Flow<List<FinancialRecordEntity>> = financialDao.getAllRecords()
 
-    suspend fun runSmsAndCallFinanceParse() = withContext(Dispatchers.IO) {
+    suspend fun runSmsAndCallFinanceParse(): Int = withContext(Dispatchers.IO) {
         var count = 0
-        // Query actual SMS and parse them
-        try {
-            val cursor = context.contentResolver.query(
-                Telephony.Sms.CONTENT_URI,
-                arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE),
-                null, null, "${Telephony.Sms.DATE} DESC"
-            )
-            cursor?.use {
-                val addressIdx = it.getColumnIndex(Telephony.Sms.ADDRESS)
-                val bodyIdx = it.getColumnIndex(Telephony.Sms.BODY)
-                val dateIdx = it.getColumnIndex(Telephony.Sms.DATE)
-                if (addressIdx >= 0 && bodyIdx >= 0 && dateIdx >= 0) {
-                    var smsCount = 0
-                    while (it.moveToNext() && smsCount < 30) {
-                        val address = it.getString(addressIdx)
-                        val body = it.getString(bodyIdx)
-                        val timestamp = it.getLong(dateIdx)
 
-                        val record = parseFinancialSmsBody(address, body, timestamp)
-                        if (record != null) {
-                            financialDao.insertRecord(record)
-                            count++
+        if (hasPermission(android.Manifest.permission.READ_SMS)) {
+            try {
+                context.contentResolver.query(
+                    Telephony.Sms.CONTENT_URI,
+                    arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE),
+                    null, null, "${Telephony.Sms.DATE} DESC"
+                )?.use { cursor ->
+                    val addressIdx = cursor.getColumnIndex(Telephony.Sms.ADDRESS)
+                    val bodyIdx = cursor.getColumnIndex(Telephony.Sms.BODY)
+                    val dateIdx = cursor.getColumnIndex(Telephony.Sms.DATE)
+                    if (addressIdx >= 0 && bodyIdx >= 0 && dateIdx >= 0) {
+                        var scanned = 0
+                        while (cursor.moveToNext() && scanned < MAX_SMS_SCAN) {
+                            scanned++
+                            val address = cursor.getString(addressIdx) ?: continue
+                            val body = cursor.getString(bodyIdx) ?: continue
+                            val timestamp = cursor.getLong(dateIdx)
+
+                            val record = FinancialMessageParser.parseSms(address, body, timestamp)
+                            if (record != null && financialDao.insertRecordIfNew(record) != -1L) count++
                         }
-                        smsCount++
                     }
                 }
+            } catch (e: Exception) {
+                Log.e("OmniSyncRepo", "SMS query rejected or failed: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.e("OmniSyncRepo", "SMS query rejected or failed: ${e.message}")
         }
 
-        // Query actual Call logs and parse lender/bank activity or financial offers
-        try {
-            val cursor = context.contentResolver.query(
-                CallLog.Calls.CONTENT_URI,
-                arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.DATE, CallLog.Calls.DURATION, CallLog.Calls.TYPE),
-                null, null, "${CallLog.Calls.DATE} DESC"
-            )
-            cursor?.use {
-                val numberIdx = it.getColumnIndex(CallLog.Calls.NUMBER)
-                val dateIdx = it.getColumnIndex(CallLog.Calls.DATE)
-                if (numberIdx >= 0 && dateIdx >= 0) {
-                    var callCount = 0
-                    while (it.moveToNext() && callCount < 20) {
-                        val number = it.getString(numberIdx)
-                        val timestamp = it.getLong(dateIdx)
+        if (hasPermission(android.Manifest.permission.READ_CALL_LOG)) {
+            try {
+                context.contentResolver.query(
+                    CallLog.Calls.CONTENT_URI,
+                    arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.DATE),
+                    null, null, "${CallLog.Calls.DATE} DESC"
+                )?.use { cursor ->
+                    val numberIdx = cursor.getColumnIndex(CallLog.Calls.NUMBER)
+                    val dateIdx = cursor.getColumnIndex(CallLog.Calls.DATE)
+                    if (numberIdx >= 0 && dateIdx >= 0) {
+                        var scanned = 0
+                        while (cursor.moveToNext() && scanned < MAX_CALL_SCAN) {
+                            scanned++
+                            val number = cursor.getString(numberIdx) ?: continue
+                            val timestamp = cursor.getLong(dateIdx)
 
-                        val record = parseFinancialCallLog(number, timestamp)
-                        if (record != null) {
-                            financialDao.insertRecord(record)
-                            count++
+                            val record = FinancialMessageParser.parseCallLog(number, timestamp)
+                            if (record != null && financialDao.insertRecordIfNew(record) != -1L) count++
                         }
-                        callCount++
                     }
                 }
+            } catch (e: Exception) {
+                Log.e("OmniSyncRepo", "Call Log query failed: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.e("OmniSyncRepo", "Call Log query failed: ${e.message}")
         }
 
-        // Seed comprehensive interactive initial mockup records if no items are returned (offline/emulator simulation)
-        val currentRecords = financialDao.getAllRecords().firstOrNull() ?: emptyList()
-        if (currentRecords.isEmpty()) {
-            val simulated = listOf(
-                FinancialRecordEntity(
-                    title = "HDFC Loan EMI Auto-Debit",
-                    type = "EXPENSE",
-                    amount = 28500.0,
-                    category = "LOAN",
-                    description = "Monthly Loan Repayment for Apartment Mortgage (Acc: XXXX8992). Interest factor: 8.4% p.a.",
-                    accountName = "HDFC Mortgage Account"
-                ),
-                FinancialRecordEntity(
-                    title = "Groww Nifty 50 SIP Mutual Fund",
-                    type = "EXPENSE",
-                    amount = 12000.0,
-                    category = "SIP",
-                    description = "Automated systematic investment plan deposit to index growth fund.",
-                    accountName = "Groww Mutual Fund"
-                ),
-                FinancialRecordEntity(
-                    title = "Salary Credited",
-                    type = "EARNING",
-                    amount = 145000.0,
-                    category = "GENERAL",
-                    description = "Omni Corp Professional Services Monthly Compensation salary credit.",
-                    accountName = "Citibank Primary"
-                ),
-                FinancialRecordEntity(
-                    title = "Chase Credit Card Payment Plan",
-                    type = "EXPENSE",
-                    amount = 8900.0,
-                    category = "CREDIT_CARD",
-                    description = "Cleared statement balance (Acc: XXXX2011).",
-                    accountName = "Chase Titanium Visa"
-                ),
-                FinancialRecordEntity(
-                    title = "SBI Savings Interest Credit",
-                    type = "EARNING",
-                    amount = 4120.0,
-                    category = "INTEREST",
-                    description = "Quarterly cumulative savings account interest yield.",
-                    accountName = "SBI Savings Account"
-                ),
-                FinancialRecordEntity(
-                    title = "Exclusive Housing Loan Premium Rebate",
-                    type = "OFFER",
-                    amount = 1500.0,
-                    category = "OFFER",
-                    description = "Pre-approved home renegotiation: Save 0.35% off annual lending index.",
-                    accountName = "ICICI Lending Desk",
-                    isActionable = true
-                )
-            )
-            simulated.forEach { financialDao.insertRecord(it) }
+        // Seed demo data only the very first time, so the dashboard is never blank on an
+        // emulator / device without permissions. Re-syncs never re-add it.
+        if (financialDao.countRecords() == 0 && getSettingValue(KEY_DEMO_SEEDED) != "true") {
+            demoRecords().forEach { financialDao.insertRecordIfNew(it) }
+            saveSetting(KEY_DEMO_SEEDED, "true")
         }
+
+        count
     }
 
-    private fun parseFinancialSmsBody(address: String, body: String, timestamp: Long): FinancialRecordEntity? {
-        val cleaned = body.lowercase()
-        return when {
-            cleaned.contains("debit") || cleaned.contains("spent") || cleaned.contains("sent to") || cleaned.contains("paid") -> {
-                val amount = extractAmount(cleaned)
-                val cat = when {
-                    cleaned.contains("loan") || cleaned.contains("emi") -> "LOAN"
-                    cleaned.contains("sip") || cleaned.contains("mutual") -> "SIP"
-                    cleaned.contains("card") || cleaned.contains("visa") || cleaned.contains("master") -> "CREDIT_CARD"
-                    else -> "GENERAL"
-                }
-                FinancialRecordEntity(
-                    timestamp = timestamp,
-                    title = "SMS Debited: $address",
-                    type = "EXPENSE",
-                    amount = amount,
-                    category = cat,
-                    description = body,
-                    accountName = address
-                )
-            }
-            cleaned.contains("credit") || cleaned.contains("received") || cleaned.contains("deposited") -> {
-                val amount = extractAmount(cleaned)
-                val cat = if (cleaned.contains("interest")) "INTEREST" else "GENERAL"
-                FinancialRecordEntity(
-                    timestamp = timestamp,
-                    title = "SMS Credited: $address",
-                    type = "EARNING",
-                    amount = amount,
-                    category = cat,
-                    description = body,
-                    accountName = address
-                )
-            }
-            cleaned.contains("offer") || cleaned.contains("approved") || cleaned.contains("cashback") -> {
-                FinancialRecordEntity(
-                    timestamp = timestamp,
-                    title = "SMS Offer: $address",
-                    type = "OFFER",
-                    amount = 0.0,
-                    category = "OFFER",
-                    description = body,
-                    accountName = address,
-                    isActionable = true
-                )
-            }
-            else -> null
-        }
-    }
+    private fun hasPermission(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
-    private fun parseFinancialCallLog(number: String, timestamp: Long): FinancialRecordEntity? {
-        // Identify bank contact patterns
-        val cleanNo = number.replace(" ", "").replace("-", "")
-        return if (cleanNo.startsWith("+1800") || cleanNo.startsWith("1800") || cleanNo.contains("80092") || cleanNo.contains("811")) {
-            FinancialRecordEntity(
-                timestamp = timestamp,
-                title = "Financial Desk Callback",
-                type = "OFFER",
-                amount = 0.0,
-                category = "OFFER",
-                description = "Outgoing bank support center notification log. High likelihood of EMI / Loan refinancing inquiry availability.",
-                accountName = number,
-                isActionable = true
-            )
-        } else null
-    }
-
-    private fun extractAmount(text: String): Double {
-        val regex = Regex("(?:inr|rs|usd|\\$|eur)\\.?\\s*([\\d,]+(?:\\.\\d{2})?)")
-        val match = regex.find(text)
-        return match?.groupValues?.get(1)?.replace(",", "")?.toDoubleOrNull() ?: 0.0
-    }
+    private fun demoRecords(): List<FinancialRecordEntity> = listOf(
+        FinancialRecordEntity(
+            title = "HDFC Loan EMI Auto-Debit",
+            type = "EXPENSE",
+            amount = 28500.0,
+            category = "LOAN",
+            description = "Monthly loan repayment for apartment mortgage (Acc: XXXX8992). Interest 8.4% p.a.",
+            accountName = "HDFC Mortgage Account",
+            dedupeKey = "demo|loan-emi"
+        ),
+        FinancialRecordEntity(
+            title = "Groww Nifty 50 SIP Mutual Fund",
+            type = "EXPENSE",
+            amount = 12000.0,
+            category = "SIP",
+            description = "Automated systematic investment plan deposit to index growth fund.",
+            accountName = "Groww Mutual Fund",
+            dedupeKey = "demo|sip"
+        ),
+        FinancialRecordEntity(
+            title = "Salary Credited",
+            type = "EARNING",
+            amount = 145000.0,
+            category = "GENERAL",
+            description = "Monthly compensation salary credit.",
+            accountName = "Citibank Primary",
+            dedupeKey = "demo|salary"
+        ),
+        FinancialRecordEntity(
+            title = "Credit Card Payment",
+            type = "EXPENSE",
+            amount = 8900.0,
+            category = "CREDIT_CARD",
+            description = "Cleared statement balance (Acc: XXXX2011).",
+            accountName = "Chase Titanium Visa",
+            dedupeKey = "demo|card"
+        ),
+        FinancialRecordEntity(
+            title = "SBI Savings Interest Credit",
+            type = "EARNING",
+            amount = 4120.0,
+            category = "INTEREST",
+            description = "Quarterly cumulative savings account interest yield.",
+            accountName = "SBI Savings Account",
+            dedupeKey = "demo|interest"
+        ),
+        FinancialRecordEntity(
+            title = "Housing Loan Rebate Offer",
+            type = "OFFER",
+            amount = 1500.0,
+            category = "OFFER",
+            description = "Pre-approved home renegotiation: save 0.35% off the annual lending index.",
+            accountName = "ICICI Lending Desk",
+            isActionable = true,
+            dedupeKey = "demo|offer"
+        )
+    )
 
     suspend fun clearFinancialRecords() = withContext(Dispatchers.IO) {
         financialDao.clearAllRecords()
@@ -386,34 +355,49 @@ class OmniSyncRepository(private val context: Context, private val database: App
     // --- Multi-Account Email Synchronization ---
     val allEmails: Flow<List<EmailItemEntity>> = emailDao.getAllEmails()
 
-    suspend fun syncMultiAccountMails() = withContext(Dispatchers.IO) {
+    suspend fun syncMultiAccountMails(): String = withContext(Dispatchers.IO) {
         val composioApiKey = getSettingValue("composio_api_key")
 
-        val composioMails = if (composioApiKey.isNotEmpty()) {
-            com.example.data.api.ComposioClient.fetchRecentGmailMails(composioApiKey).map {
+        if (composioApiKey.isNotEmpty()) {
+            val composioMails = com.example.data.api.ComposioClient.fetchRecentGmailMails(composioApiKey).map {
+                val lower = it.snippet.lowercase()
                 EmailItemEntity(
-                    accountEmail = "composio_synced_account",
+                    accountEmail = it.accountEmail,
                     provider = "GMAIL",
                     sender = it.sender,
                     subject = it.subject,
-                    summary = it.snippet.take(100) + "...",
+                    summary = it.snippet.take(120),
                     fullBody = it.snippet,
-                    category = if (it.snippet.lowercase().contains("offer") || it.snippet.lowercase().contains("sale")) "PROMOTIONS" else "PRIMARY",
-                    isRead = false
+                    category = when {
+                        lower.contains("offer") || lower.contains("sale") || lower.contains("discount") -> "PROMOTIONS"
+                        lower.contains("lottery") || lower.contains("you won") -> "SPAM"
+                        else -> "PRIMARY"
+                    }
                 )
             }
-        } else {
-            emptyList()
+
+            // Only replace the cache once we actually have fresh data, otherwise a failed
+            // network call would leave the user staring at an empty inbox.
+            if (composioMails.isNotEmpty()) {
+                emailDao.clearAllMails()
+                composioMails.forEach { emailDao.insertEmail(it) }
+                return@withContext "Synced ${composioMails.size} emails via Composio."
+            }
+            return@withContext "Composio returned no emails. Check your API key and connected Gmail account."
         }
 
-        if (composioMails.isNotEmpty()) {
-            emailDao.clearAllMails()
-            composioMails.forEach { emailDao.insertEmail(it) }
-            return@withContext
+        // No key configured: show a labelled sample inbox once so the screen is explorable.
+        if (emailDao.countEmails() == 0) {
+            sampleEmails().forEach { emailDao.insertEmail(it) }
         }
+        "No Composio API key configured — showing sample inbox. Add a key in Portals to sync real mail."
+    }
 
-        // Fallback to sample data if no API key is provided or fetch fails
-        val sampleEmails = listOf(
+    suspend fun markEmailRead(id: Long) = withContext(Dispatchers.IO) {
+        emailDao.markEmailRead(id)
+    }
+
+    private fun sampleEmails(): List<EmailItemEntity> = listOf(
             EmailItemEntity(
                 accountEmail = "user@gmail.com",
                 provider = "GMAIL",
@@ -476,9 +460,6 @@ class OmniSyncRepository(private val context: Context, private val database: App
             )
         )
 
-        emailDao.clearAllMails()
-        sampleEmails.forEach { emailDao.insertEmail(it) }
-    }
 
     suspend fun clearEmails() = withContext(Dispatchers.IO) {
         emailDao.clearAllMails()
@@ -527,43 +508,49 @@ class OmniSyncRepository(private val context: Context, private val database: App
 
     // --- Outbound SMTP Summarizer ---
     suspend fun sendDailySmtpSummaryMail(): Pair<Boolean, String> = withContext(Dispatchers.IO) {
-        val host = getSettingValue("smtp_host").ifEmpty { "smtp.gmail.com" }
-        val port = getSettingValue("smtp_port").ifEmpty { "465" }
-        val user = getSettingValue("smtp_username")
-        val recipient = getSettingValue("smtp_recipient")
+        val config = SmtpClient.Config(
+            host = getSettingValue("smtp_host").ifEmpty { "smtp.gmail.com" },
+            port = getSettingValue("smtp_port").toIntOrNull() ?: 465,
+            username = getSettingValue("smtp_username"),
+            password = getSettingValue("smtp_password"),
+            recipient = getSettingValue("smtp_recipient")
+        )
 
-        val healthStr = gatherHealthContext()
-        val financeStr = gatherFinancialContext()
-        val emailStr = gatherEmailContext()
+        SmtpClient.validate(config)?.let { return@withContext false to it }
 
-        val mailSubject = "OmniSync Daily Summary: ${System.currentTimeMillis()}"
+        val timestamp = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm")
+            .withZone(ZoneId.systemDefault())
+            .format(Instant.now())
+
         val mailBody = """
-            OMNISYNC COLLABORATIVE AI DAILY INTELLIGENCE BRIEF
-            ==================================================
-            Dear User,
-            Here is your unified daily breakdown synchronized from your watch, multiple connected email accounts, and parsed transactions:
-            
-            HEALTH INSIGHTS:
-            $healthStr
-            
-            FINANCE BREAKDOWN (Loans, Cards, SIPs):
-            $financeStr
-            
-            EMAIL HIGHLIGHTS (Spam and Promotions segregated!):
-            $emailStr
-            
-            --------------------------------------------------
-            This is an automated OmniSync intelligence brief.
+            OMNISYNC DAILY INTELLIGENCE BRIEF
+            =================================
+            Generated: $timestamp
+
+            HEALTH INSIGHTS
+            ${gatherHealthContext()}
+
+            FINANCE BREAKDOWN (Loans, Cards, SIPs)
+            ${gatherFinancialContext()}
+
+            EMAIL HIGHLIGHTS
+            ${gatherEmailContext()}
+
+            ---------------------------------
+            Automated brief from OmniSync AI.
         """.trimIndent()
 
-        Log.i("OmniSyncSMTP", "SMTP dispatch requested to $recipient via $host:$port (not yet implemented)")
-        return@withContext Pair(false, "SMTP dispatch is not yet implemented. Configure a real SMTP library to send to $recipient.")
+        val result = SmtpClient.send(config, "OmniSync Daily Summary — $timestamp", mailBody)
+        result.fold(
+            onSuccess = { true to it },
+            onFailure = { false to "SMTP send failed: ${it.localizedMessage ?: it::class.simpleName}" }
+        )
     }
 
     // --- Private Context Aggregators ---
     private suspend fun gatherHealthContext(): String {
         val metrics = database.healthDao().getAllMetricsDirect()
-        if (metrics.isEmpty()) return "No synchronized wearable data found. Please trigger Galaxy Watch Bluetooth active sync."
+        if (metrics.isEmpty()) return "No wearable data synced yet. Ask the user to grant Health Connect access and run a sync."
         val latest = metrics.first()
         return """
             Latest Read (Sync Time: ${latest.timestamp}):

@@ -27,13 +27,14 @@ import com.example.ui.viewmodel.OmniSyncViewModel
 
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
-fun HealthScreen(viewModel: OmniSyncViewModel) {
+fun HealthScreen(
+    viewModel: OmniSyncViewModel,
+    onRequestHealthPermissions: () -> Unit = {}
+) {
     val healthList by viewModel.healthMetrics.collectAsState()
     val isSyncingWatch by viewModel.isSyncingWatch.collectAsState()
     val aiWellnessInsights by viewModel.aiWellnessAnalysis.collectAsState()
     val generatingInsights by viewModel.generatingWellnessAnalysis.collectAsState()
-
-    var showBleScanAlert by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier
@@ -50,66 +51,71 @@ fun HealthScreen(viewModel: OmniSyncViewModel) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Samsung Watch Integration",
+                        text = "Wearable Vitals",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Black
                     )
                     Text(
-                        text = "Bluetooth BLE Wearable Vital Sync",
+                        text = "Synced from Health Connect (Samsung Health, Fitbit, Google Fit…)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     )
                 }
-                
+
                 Button(
-                    onClick = { showBleScanAlert = true },
+                    onClick = { viewModel.triggerWatchSync() },
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    enabled = !isSyncingWatch,
+                    modifier = Modifier.testTag("health_sync_btn")
                 ) {
-                    Icon(imageVector = Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("BLE Scan", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    if (isSyncingWatch) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 1.5.dp)
+                    } else {
+                        Icon(imageVector = Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Sync", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
                 }
             }
         }
 
-        // --- Bluetooth Scan Simulation Dialog ---
-        if (showBleScanAlert) {
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        // --- Health Connect permission entry point ---
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.BluetoothSearching, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Peripheral GATT Bluetooth Scanning...", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                        }
-                        Spacer(modifier = Modifier.height(10.dp))
+                    Icon(
+                        Icons.Default.HealthAndSafety,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Found: Galaxy Watch 6 Classic (Addr: AA:BB:CC:11:22:33)\nRSSI: -65dBm. Link authenticated via Samsung Health Wear engine.",
-                            style = MaterialTheme.typography.bodySmall
+                            "Health Connect access",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                            TextButton(onClick = { showBleScanAlert = false }) {
-                                Text("Acknowledge", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Button(
-                                onClick = {
-                                    showBleScanAlert = false
-                                    viewModel.triggerWatchSync()
-                                },
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Text("Sync Now")
-                            }
-                        }
+                        Text(
+                            "Allow steps, heart rate and sleep to be read from your wearable.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(
+                        onClick = onRequestHealthPermissions,
+                        modifier = Modifier.testTag("health_permission_btn")
+                    ) {
+                        Text("Grant", fontWeight = FontWeight.Bold)
                     }
                 }
             }

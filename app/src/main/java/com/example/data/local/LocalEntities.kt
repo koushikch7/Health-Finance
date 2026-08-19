@@ -1,7 +1,9 @@
 package com.example.data.local
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
+import java.util.UUID
 
 @Entity(tableName = "chat_threads")
 data class ChatThreadEntity(
@@ -10,7 +12,10 @@ data class ChatThreadEntity(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "chat_messages")
+@Entity(
+    tableName = "chat_messages",
+    indices = [Index(value = ["threadId"])]
+)
 data class ChatMessageEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val threadId: String,
@@ -32,20 +37,31 @@ data class HealthMetricEntity(
     val bloodOxygen: Int = 98 // extra health metadata
 )
 
-@Entity(tableName = "financial_records")
+@Entity(
+    tableName = "financial_records",
+    indices = [Index(value = ["dedupeKey"], unique = true)]
+)
 data class FinancialRecordEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val timestamp: Long = System.currentTimeMillis(),
     val title: String,
-    val type: String, // "EXPENSE", "EARNING", "LOAN", "SIP", "OFFER"
+    val type: String, // "EXPENSE", "EARNING", "OFFER"
     val amount: Double,
     val category: String, // "LOAN", "SIP", "CREDIT_CARD", "INTEREST", "BANK_TRANSFER", "OFFER", "GENERAL"
     val description: String,
     val accountName: String,
-    val isActionable: Boolean = false
+    val isActionable: Boolean = false,
+    /**
+     * Stable identity of the source event (SMS/call/seed). Used to keep re-parsing idempotent
+     * so that the ledger does not accumulate duplicates on every sync.
+     */
+    val dedupeKey: String = UUID.randomUUID().toString()
 )
 
-@Entity(tableName = "email_items")
+@Entity(
+    tableName = "email_items",
+    indices = [Index(value = ["category"])]
+)
 data class EmailItemEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val accountEmail: String,

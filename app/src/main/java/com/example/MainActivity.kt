@@ -1,8 +1,8 @@
 package com.example
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,7 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.room.Room
+import androidx.core.content.ContextCompat
+import androidx.health.connect.client.PermissionController
 import com.example.data.local.AppDatabase
 import com.example.data.repository.OmniSyncRepository
 import com.example.ui.screens.*
@@ -28,48 +30,44 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var database: AppDatabase
     private lateinit var repository: OmniSyncRepository
+    private var viewModelRef: OmniSyncViewModel? = null
 
-    // Request permissions on startup for absolute compliance
+    // Runtime permissions for the SMS / call-log ledger parser.
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val smsGranted = permissions[Manifest.permission.READ_SMS] ?: false
-        val callsGranted = permissions[Manifest.permission.READ_CALL_LOG] ?: false
-        val btGranted = permissions[Manifest.permission.BLUETOOTH_CONNECT] ?: false
-
-        if (smsGranted || callsGranted || btGranted) {
-            Toast.makeText(
-                this,
-                "Permissions linked successfully! Active sync enabled.",
-                Toast.LENGTH_SHORT
-            ).show()
+        if (permissions.values.any { it }) {
+            // Re-run the parser now that we can actually read the providers.
+            viewModelRef?.triggerFinanceSync()
         }
+    }
+
+    // Health Connect uses its own permission contract rather than the standard Android one.
+    private val healthPermissionLauncher = registerForActivityResult(
+        PermissionController.createRequestPermissionResultContract()
+    ) { granted ->
+        if (granted.isNotEmpty()) viewModelRef?.triggerWatchSync()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Initialize SQLite Room DB
-        database = Room.databaseBuilder(
-            applicationContext,
-            AppDatabase::class.java,
-            "omnisync_intelligence_db"
-        )
-            .build()
+        // Initialize SQLite Room DB (singleton — avoids re-opening on every recreate)
+        database = AppDatabase.getInstance(applicationContext)
 
         repository = OmniSyncRepository(applicationContext, database)
 
-        // Launch permissions prompt
-        permissionLauncher.launch(
-            arrayOf(
-                Manifest.permission.READ_SMS,
-                Manifest.permission.RECEIVE_SMS,
-                Manifest.permission.READ_CALL_LOG,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.BLUETOOTH_SCAN
-            )
+        // Only ask for what is still missing, so returning users are not re-prompted.
+        val required = arrayOf(
+            Manifest.permission.READ_SMS,
+            Manifest.permission.RECEIVE_SMS,
+            Manifest.permission.READ_CALL_LOG
         )
+        val missing = required.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isNotEmpty()) permissionLauncher.launch(missing.toTypedArray())
 
         setContent {
             MyApplicationTheme {
@@ -79,10 +77,24 @@ class MainActivity : ComponentActivity() {
                     factory = viewModelFactory
                 )
 
+                // Permission callbacks fire outside composition, so keep a handle to the VM.
+                SideEffect { viewModelRef = viewModel }
+
                 val selectedScreen by viewModel.selectedScreen.collectAsState()
+                val statusMessage by viewModel.statusMessage.collectAsState()
+                val snackbarHostState = remember { SnackbarHostState() }
+
+                // Surface every sync result (success or failure) instead of failing silently.
+                LaunchedEffect(statusMessage) {
+                    statusMessage?.let {
+                        snackbarHostState.showSnackbar(it)
+                        viewModel.consumeStatusMessage()
+                    }
+                }
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize().testTag("main_app_scaffold"),
+                    snackbarHost = { SnackbarHost(snackbarHostState) },
                     topBar = {
                         @OptIn(ExperimentalMaterial3Api::class)
                         CenterAlignedTopAppBar(
@@ -134,7 +146,7 @@ class MainActivity : ComponentActivity() {
                             NavigationBarItem(
                                 selected = selectedScreen == Screen.Emails,
                                 onClick = { viewModel.navigateTo(Screen.Emails) },
-                                icon = { Icon(Icons.Default.ForwardToInbox, contentDescription = "Emails") },
+                                icon = { Icon(Icons.AutoMirrored.Filled.ForwardToInbox, contentDescription = "Emails") },
                                 label = { Text("Mails", fontWeight = FontWeight.Bold) },
                                 modifier = Modifier.testTag("nav_mails_item")
                             )
@@ -170,7 +182,12 @@ class MainActivity : ComponentActivity() {
                         ) { targetScreen ->
                             when (targetScreen) {
                                 Screen.Dashboard -> DashboardScreen(viewModel)
-                                Screen.Health -> HealthScreen(viewModel)
+                                Screen.Health -> HealthScreen(
+                                    viewModel = viewModel,
+                                    onRequestHealthPermissions = {
+                                        healthPermissionLauncher.launch(repository.healthConnectPermissions)
+                                    }
+                                )
                                 Screen.Financials -> FinancialScreen(viewModel)
                                 Screen.Emails -> EmailScreen(viewModel)
                                 Screen.Chatbot -> ChatbotScreen(viewModel)

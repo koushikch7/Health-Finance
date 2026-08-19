@@ -14,6 +14,7 @@ import com.example.data.local.FinancialRecordEntity
 import com.example.data.local.HealthMetricEntity
 import com.example.data.repository.OmniSyncRepository
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -43,11 +44,22 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
     private val _generatingWellnessAnalysis = MutableStateFlow(false)
     val generatingWellnessAnalysis = _generatingWellnessAnalysis.asStateFlow()
 
+    /** Human readable outcome of the most recent sync of any kind, shown as a snackbar. */
+    private val _statusMessage = MutableStateFlow<String?>(null)
+    val statusMessage = _statusMessage.asStateFlow()
+
+    fun consumeStatusMessage() {
+        _statusMessage.value = null
+    }
+
     fun triggerWatchSync() {
+        if (_isSyncingWatch.value) return
         viewModelScope.launch {
             _isSyncingWatch.value = true
-            repository.syncBluetoothWatchMetrics()
+            val result = runCatching { repository.syncBluetoothWatchMetrics() }
             _isSyncingWatch.value = false
+            result.onSuccess { _statusMessage.value = it.message }
+                .onFailure { _statusMessage.value = "Watch sync failed: ${it.localizedMessage}" }
             generateWellnessInsights()
         }
     }
@@ -69,10 +81,18 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
     val isSyncingFinance = _isSyncingFinance.asStateFlow()
 
     fun triggerFinanceSync() {
+        if (_isSyncingFinance.value) return
         viewModelScope.launch {
             _isSyncingFinance.value = true
-            repository.runSmsAndCallFinanceParse()
+            val result = runCatching { repository.runSmsAndCallFinanceParse() }
             _isSyncingFinance.value = false
+            result.onSuccess { added ->
+                _statusMessage.value = if (added > 0) {
+                    "Parsed $added new transaction(s) from SMS and calls."
+                } else {
+                    "No new transactions found. Grant SMS/Call permissions for live parsing."
+                }
+            }.onFailure { _statusMessage.value = "Finance parse failed: ${it.localizedMessage}" }
         }
     }
 
@@ -91,11 +111,18 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
     }
 
     fun triggerEmailsSync() {
+        if (_isSyncingMails.value) return
         viewModelScope.launch {
             _isSyncingMails.value = true
-            repository.syncMultiAccountMails()
+            val result = runCatching { repository.syncMultiAccountMails() }
             _isSyncingMails.value = false
+            result.onSuccess { _statusMessage.value = it }
+                .onFailure { _statusMessage.value = "Email sync failed: ${it.localizedMessage}" }
         }
+    }
+
+    fun markEmailRead(id: Long) {
+        viewModelScope.launch { repository.markEmailRead(id) }
     }
 
     // --- Chatbot UI State ---
@@ -105,8 +132,16 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
     private val _activeThreadId = MutableStateFlow<String?>(null)
     val activeThreadId = _activeThreadId.asStateFlow()
 
-    private val _activeMessages = MutableStateFlow<List<ChatMessageEntity>>(emptyList())
-    val activeMessages = _activeMessages.asStateFlow()
+    /**
+     * Messages of the active thread. Using flatMapLatest means switching threads automatically
+     * cancels the previous collection instead of leaking one coroutine per selection.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeMessages: StateFlow<List<ChatMessageEntity>> = _activeThreadId
+        .flatMapLatest { id ->
+            if (id == null) flowOf(emptyList()) else repository.getMessagesForThread(id)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _inputText = MutableStateFlow("")
     val inputText = _inputText.asStateFlow()
@@ -118,16 +153,8 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
         _inputText.value = text
     }
 
-    private var messageCollectionJob: Job? = null
-
     fun selectThread(threadId: String) {
         _activeThreadId.value = threadId
-        messageCollectionJob?.cancel()
-        messageCollectionJob = viewModelScope.launch {
-            repository.getMessagesForThread(threadId).collect { msgs ->
-                _activeMessages.value = msgs
-            }
-        }
     }
 
     fun createNewThreadClick(title: String = "Sync Analysis Discuss") {
@@ -141,12 +168,7 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
         val nextThread = chatThreads.value.firstOrNull { it.id != threadId }
         viewModelScope.launch {
             repository.deleteThread(threadId)
-            if (nextThread != null) {
-                selectThread(nextThread.id)
-            } else {
-                _activeThreadId.value = null
-                _activeMessages.value = emptyList()
-            }
+            _activeThreadId.value = nextThread?.id
         }
     }
 
@@ -210,19 +232,18 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
             _nextcloudConnected.value = repository.getSettingValue("nextcloud_connected").toBoolean()
 
             // Pre-seed data in parallel
-            launch { repository.syncBluetoothWatchMetrics() }
-            launch { repository.runSmsAndCallFinanceParse() }
-            launch { repository.syncMultiAccountMails() }
-            launch { generateWellnessInsights() }
+            launch { triggerWatchSync() }
+            launch { triggerFinanceSync() }
+            launch { triggerEmailsSync() }
         }
 
-        // Manage active thread in a separate coroutine so it isn't blocked by data loading
+        // Make sure a thread always exists, then keep the selection pointed at a valid thread.
         viewModelScope.launch {
+            repository.ensureThreadExists("Inaugural AI Chat Integration")
             repository.allThreads.collect { threads ->
-                if (threads.isNotEmpty() && _activeThreadId.value == null) {
-                    selectThread(threads.first().id)
-                } else if (threads.isEmpty() && _activeThreadId.value == null) {
-                    createNewThreadClick("Inaugural AI Chat Integration")
+                val current = _activeThreadId.value
+                if (threads.isNotEmpty() && threads.none { it.id == current }) {
+                    _activeThreadId.value = threads.first().id
                 }
             }
         }
@@ -262,9 +283,10 @@ class OmniSyncViewModel(application: Application, private val repository: OmniSy
 
     fun triggerSmtpOverviewSend() {
         viewModelScope.launch {
-            _smtpResult.value = "Initiating SMTP email handshake..."
-            val outcome = repository.sendDailySmtpSummaryMail()
-            _smtpResult.value = outcome.second
+            _smtpResult.value = "Sending daily summary…"
+            val (ok, message) = repository.sendDailySmtpSummaryMail()
+            _smtpResult.value = message
+            _statusMessage.value = if (ok) message else "Email not sent — $message"
         }
     }
 

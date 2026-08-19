@@ -202,7 +202,7 @@ fun SettingsScreen(viewModel: OmniSyncViewModel) {
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 
-                Divider()
+                HorizontalDivider()
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
                     "Composio API (For Real Email Sync & Dispatch)",
@@ -287,7 +287,7 @@ fun SettingsScreen(viewModel: OmniSyncViewModel) {
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
-                    Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // Nextcloud Toggle

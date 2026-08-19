@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.*
@@ -161,7 +162,7 @@ fun DashboardScreen(viewModel: OmniSyncViewModel) {
                             color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                         )
                         Icon(
-                            imageVector = Icons.Default.TrendingUp,
+                            imageVector = Icons.AutoMirrored.Filled.TrendingUp,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onPrimaryContainer
                         )
@@ -173,7 +174,7 @@ fun DashboardScreen(viewModel: OmniSyncViewModel) {
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Divider(color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f))
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column {
@@ -191,7 +192,7 @@ fun DashboardScreen(viewModel: OmniSyncViewModel) {
 
         // --- Emails Segregation Analytics ---
         item {
-            SectionHeader(title = "Multi-Account Inbox Segregation", icon = Icons.Filled.ForwardToInbox, keyName = "Emails") {
+            SectionHeader(title = "Multi-Account Inbox Segregation", icon = Icons.AutoMirrored.Filled.ForwardToInbox, keyName = "Emails") {
                 viewModel.navigateTo(Screen.Emails)
             }
         }
@@ -235,7 +236,7 @@ fun DashboardScreen(viewModel: OmniSyncViewModel) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Default.Send,
+                            imageVector = Icons.AutoMirrored.Filled.Send,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onTertiaryContainer,
                             modifier = Modifier.size(20.dp)

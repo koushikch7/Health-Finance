@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Call
@@ -93,7 +94,7 @@ fun FinancialScreen(viewModel: OmniSyncViewModel) {
                     amount = "INR $totalEarnings",
                     label = "Salaries & Interests",
                     color = Color(0xFF4CAF50),
-                    icon = Icons.Default.TrendingUp
+                    icon = Icons.AutoMirrored.Filled.TrendingUp
                 )
                 FinanceMetricCard(
                     modifier = Modifier.weight(1f),
@@ -101,7 +102,7 @@ fun FinancialScreen(viewModel: OmniSyncViewModel) {
                     amount = "INR $totalExpenses",
                     label = "Outflow & Auto-Debits",
                     color = Color(0xFFFF9800),
-                    icon = Icons.Default.TrendingDown
+                    icon = Icons.AutoMirrored.Filled.TrendingDown
                 )
             }
         }
@@ -177,7 +178,7 @@ fun FinancialScreen(viewModel: OmniSyncViewModel) {
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.TrendingUp, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color(0xFF4CAF50))
+                            Icon(Icons.AutoMirrored.Filled.TrendingUp, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color(0xFF4CAF50))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Mutual Fund SIPs", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                         }
