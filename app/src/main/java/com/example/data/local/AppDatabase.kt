@@ -1,6 +1,8 @@
 package com.example.data.local
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -144,6 +146,51 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        /**
+         * v1 -> v2 adds `financial_records.dedupeKey` (unique) plus lookup indices.
+         *
+         * Chat history is authored by the user and cannot be regenerated from the device,
+         * so this migrates in place rather than dropping tables. The ledger table is
+         * rebuilt because SQLite cannot add a NOT NULL column and backfill it atomically;
+         * existing rows are carried over with a synthetic key derived from their id.
+         */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `financial_records_new` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `timestamp` INTEGER NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `type` TEXT NOT NULL,
+                        `amount` REAL NOT NULL,
+                        `category` TEXT NOT NULL,
+                        `description` TEXT NOT NULL,
+                        `accountName` TEXT NOT NULL,
+                        `isActionable` INTEGER NOT NULL,
+                        `dedupeKey` TEXT NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `financial_records_new`
+                        (id, timestamp, title, type, amount, category, description, accountName, isActionable, dedupeKey)
+                    SELECT id, timestamp, title, type, amount, category, description, accountName, isActionable,
+                           'legacy|' || id
+                    FROM `financial_records`
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE `financial_records`")
+                db.execSQL("ALTER TABLE `financial_records_new` RENAME TO `financial_records`")
+
+                // Index names must match Room's generated convention or validation fails.
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_financial_records_dedupeKey` ON `financial_records` (`dedupeKey`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_chat_messages_threadId` ON `chat_messages` (`threadId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_email_items_category` ON `email_items` (`category`)")
+            }
+        }
+
         fun getInstance(context: android.content.Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -151,9 +198,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "omnisync_intelligence_db"
                 )
-                    // The schema is a local cache that can always be rebuilt from the
-                    // device sources, so a destructive fallback is safe here.
-                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    .addMigrations(MIGRATION_1_2)
                     .build()
                     .also { INSTANCE = it }
             }
